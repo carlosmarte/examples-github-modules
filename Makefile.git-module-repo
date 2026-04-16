@@ -1,0 +1,247 @@
+# Makefile.git-module-repo
+# Deterministic CLI mirror of .agents/skills/**.
+# Each target corresponds to one SKILL.md and follows the same steps.
+# The skill files remain the source of truth; this file is the executable
+# clone of those steps for direct invocation (CI, scripts, muscle memory).
+#
+# Usage:
+#   make -f Makefile.git-module-repo <target> [VAR=value ...]
+#
+# Targets <-> skills:
+#   init        <-> .agents/skills/git-module-init/SKILL.md
+#   pull-latest <-> .agents/skills/git-module-pull-latest/SKILL.md
+#   cleanup-*   <-> .agents/skills/git-module-cleanup/SKILL.md
+#   track-main  <-> .agents/skills/git-module-track-main/SKILL.md
+#   repos-md    <-> .agents/skills/git-module-generate-repos-md/SKILL.md
+#
+# Compatible with GNU Make 3.81 (macOS system make) — no .ONESHELL required.
+
+SHELL          := /bin/bash
+.DEFAULT_GOAL  := help
+
+# Tunables (override on the command line: make ... BRANCH=develop)
+BRANCH    ?= main
+REPOS_MD  ?= REPOS.md
+
+.PHONY: help init pull-latest \
+        cleanup cleanup-audit cleanup-sync cleanup-remove \
+        track-main repos-md
+
+# ---------------------------------------------------------------------------
+help:
+	@echo "Makefile.git-module-repo — mirrors .agents/skills/<name>/SKILL.md"
+	@echo ""
+	@echo "Targets:"
+	@echo "  init           REPO_URL=<url> TARGET_PATH=<path> [BRANCH=main]"
+	@echo "                 -> git-module-init"
+	@echo "  pull-latest    [TARGET_PATH=<path>]"
+	@echo "                 -> git-module-pull-latest"
+	@echo "  cleanup-audit  (read-only mismatch report)"
+	@echo "                 -> git-module-cleanup step 1"
+	@echo "  cleanup-sync   (sync URLs + re-init + pull remote)"
+	@echo "                 -> git-module-cleanup steps 3-4"
+	@echo "  cleanup-remove TARGET_PATH=<path>   (destructive — confirm first)"
+	@echo "                 -> git-module-cleanup step 2"
+	@echo "  cleanup        audit + sync (non-destructive bundle)"
+	@echo "  track-main     [BRANCH=main] [TARGET_PATH=<path>]"
+	@echo "                 -> git-module-track-main"
+	@echo "  repos-md       [REPOS_MD=REPOS.md]"
+	@echo "                 -> git-module-generate-repos-md"
+
+# ---------------------------------------------------------------------------
+# init — mirrors .agents/skills/git-module-init/SKILL.md
+# ---------------------------------------------------------------------------
+init:
+	@test -n "$(REPO_URL)"    || { echo "REPO_URL is required"    >&2; exit 2; }
+	@test -n "$(TARGET_PATH)" || { echo "TARGET_PATH is required" >&2; exit 2; }
+	@git rev-parse --is-inside-work-tree >/dev/null
+	@test ! -e "$(TARGET_PATH)" || { echo "TARGET_PATH exists: $(TARGET_PATH)" >&2; exit 3; }
+	git submodule add -b "$(BRANCH)" "$(REPO_URL)" "$(TARGET_PATH)"
+	git config -f .gitmodules "submodule.$(TARGET_PATH).branch" "$(BRANCH)"
+	git submodule update --init --recursive "$(TARGET_PATH)"
+	@git submodule status "$(TARGET_PATH)"
+	@echo "Staged: .gitmodules $(TARGET_PATH) (not committed)"
+
+# ---------------------------------------------------------------------------
+# pull-latest — mirrors .agents/skills/git-module-pull-latest/SKILL.md
+# ---------------------------------------------------------------------------
+pull-latest:
+	@if [ -n "$(TARGET_PATH)" ]; then \
+		git submodule update --remote --merge "$(TARGET_PATH)"; \
+	else \
+		git submodule update --remote --merge --recursive; \
+	fi
+	@git submodule status
+	@git diff --submodule=log || true
+
+# ---------------------------------------------------------------------------
+# cleanup — mirrors .agents/skills/git-module-cleanup/SKILL.md
+# ---------------------------------------------------------------------------
+cleanup-audit:
+	@echo "== git submodule status =="
+	@git submodule status || true
+	@echo ""
+	@echo "== .gitmodules =="
+	@cat .gitmodules 2>/dev/null || echo "(no .gitmodules)"
+	@echo ""
+	@echo "== .git/config submodule entries =="
+	@git config --file .git/config --get-regexp '^submodule\.' || echo "(none)"
+	@echo ""
+	@echo "== .git/modules/ =="
+	@ls -la .git/modules 2>/dev/null || echo "(none)"
+
+cleanup-sync:
+	git submodule sync --recursive
+	git submodule update --init --recursive
+	git submodule update --remote --merge --recursive
+	@git submodule status
+
+cleanup-remove:
+	@test -n "$(TARGET_PATH)" || { echo "TARGET_PATH is required" >&2; exit 2; }
+	git submodule deinit -f "$(TARGET_PATH)"
+	git rm -f "$(TARGET_PATH)"
+	rm -rf ".git/modules/$(TARGET_PATH)"
+	@git status
+
+cleanup: cleanup-audit cleanup-sync
+
+# ---------------------------------------------------------------------------
+# track-main — mirrors .agents/skills/git-module-track-main/SKILL.md
+# ---------------------------------------------------------------------------
+track-main:
+	@set -e; \
+	if [ -n "$(TARGET_PATH)" ]; then \
+		paths="$(TARGET_PATH)"; \
+	else \
+		paths=$$(git config --file .gitmodules --get-regexp '\.path$$' | awk '{print $$2}'); \
+	fi; \
+	for p in $$paths; do \
+		echo "==> $$p"; \
+		name=$$(git config --file .gitmodules --get-regexp '\.path$$' \
+			| awk -v p="$$p" '$$2==p { sub(/^submodule\./,"",$$1); sub(/\.path$$/,"",$$1); print $$1; exit }'); \
+		git -C "$$p" fetch origin; \
+		if ! git -C "$$p" ls-remote --heads origin "$(BRANCH)" | grep -q .; then \
+			echo "ERROR: $$p has no branch '$(BRANCH)' upstream" >&2; \
+			exit 4; \
+		fi; \
+		git config -f .gitmodules "submodule.$$name.branch" "$(BRANCH)"; \
+		git submodule sync --recursive -- "$$p"; \
+		git -C "$$p" checkout "$(BRANCH)"; \
+		git -C "$$p" pull --ff-only origin "$(BRANCH)"; \
+	done
+	@git submodule status
+
+# ---------------------------------------------------------------------------
+# repos-md — mirrors .agents/skills/git-module-generate-repos-md/SKILL.md
+# Existing $(REPOS_MD) descriptions are reused verbatim; new submodules get
+# a README-derived line, a name-derived `_(auto)_` line, or `_TBD_`.
+#
+# The script body is held in REPOS_MD_SCRIPT (define/endef), exported as an
+# environment variable, and run via `bash -c "$$REPOS_MD_SCRIPT"`. Inside the
+# define block every shell `$` is escaped as `$$` so Make does not consume it.
+# Written for bash 3.2 (macOS system bash) — uses temp files in place of
+# associative arrays / mapfile.
+# ---------------------------------------------------------------------------
+define REPOS_MD_SCRIPT
+set -eu
+REPOS_MD="$${REPOS_MD:-REPOS.md}"
+
+# Workspace — single dir cleaned by trap.
+WORK=$$(mktemp -d)
+trap 'rm -rf "$$WORK"' EXIT
+LOOKUP="$$WORK/lookup"   # tab-separated: type<TAB>key<TAB>desc
+PATHS="$$WORK/paths"     # tab-separated: name<TAB>path
+URLS="$$WORK/urls"       # tab-separated: name<TAB>url
+OUT="$$WORK/out"
+: > "$$LOOKUP"; : > "$$PATHS"; : > "$$URLS"
+
+# 1. Parse existing REPOS.md (if any). Build lookup keyed by both name and path.
+#    awk handles the table parse — far more portable than bash 3.2 [[ =~ ]].
+if [ -f "$$REPOS_MD" ]; then
+  awk -F '|' '
+    /^\|/ {
+      for (i = 2; i <= 4; i++) { gsub(/^[[:space:]]+|[[:space:]]+$$/, "", $$i) }
+      if ($$2 == "Name" || $$2 == "" || $$2 ~ /^-+$$/) next
+      path = $$3; sub(/^\[/, "", path); sub(/\].*/, "", path)
+      if (path == "" || $$4 == "") next
+      printf "name\t%s\t%s\n", $$2, $$4
+      printf "path\t%s\t%s\n", path, $$4
+    }
+  ' "$$REPOS_MD" >> "$$LOOKUP"
+fi
+
+lookup() {
+  # $$1=type (name|path), $$2=key
+  awk -F'\t' -v t="$$1" -v k="$$2" '$$1==t && $$2==k { sub(/^[^\t]*\t[^\t]*\t/,""); print; exit }' "$$LOOKUP"
+}
+
+# 2. Enumerate submodules from .gitmodules → tab files.
+git config --file .gitmodules --get-regexp '^submodule\..*\.(path|url)$$' \
+  | while read -r key val; do
+      case "$$key" in
+        submodule.*.path) n="$${key#submodule.}"; n="$${n%.path}"; printf '%s\t%s\n' "$$n" "$$val" >> "$$PATHS" ;;
+        submodule.*.url)  n="$${key#submodule.}"; n="$${n%.url}";  printf '%s\t%s\n' "$$n" "$$val" >> "$$URLS"  ;;
+      esac
+    done
+
+NAMES=$$(cut -f1 "$$PATHS" | sort -u)
+if [ -z "$$NAMES" ]; then
+  echo "No submodules registered — nothing to index" >&2
+  exit 0
+fi
+
+reused=0; generated=0; tbd=0; count=0
+
+# 3. Render REPOS.md.
+{
+  echo "# Repositories"
+  echo ""
+  echo "Index of git submodules. Edit the **Description** column freely — your text is preserved on regeneration by \`make -f Makefile.git-module-repo repos-md\`."
+  echo ""
+  echo "| Name | Repository | Description |"
+  echo "|---|---|---|"
+  while IFS= read -r n; do
+    [ -z "$$n" ] && continue
+    count=$$((count+1))
+    p=$$(awk -F'\t' -v k="$$n" '$$1==k {print $$2; exit}' "$$PATHS")
+    u=$$(awk -F'\t' -v k="$$n" '$$1==k {print $$2; exit}' "$$URLS")
+    desc=$$(lookup name "$$n")
+    if [ -n "$$desc" ]; then
+      reused=$$((reused+1))
+    else
+      desc=$$(lookup path "$$p")
+      if [ -n "$$desc" ]; then
+        reused=$$((reused+1))
+      elif [ -f "$$p/README.md" ]; then
+        desc=$$(awk '
+          /^[[:space:]]*$$/   { next }
+          /^[[:space:]]*#/    { next }
+          /^[[:space:]]*<!--/ { next }
+          /^[[:space:]]*\[!\[/{ next }
+          /^[[:space:]]*</    { next }
+                              { print; exit }
+        ' "$$p/README.md" | tr -d '\n' | sed 's/|/\\|/g')
+        if [ -n "$$desc" ]; then
+          generated=$$((generated+1))
+        else
+          desc="_TBD_"
+          tbd=$$((tbd+1))
+        fi
+      else
+        pretty=$$(echo "$$n" | tr '_-' '  ')
+        desc="$$pretty _(auto)_"
+        generated=$$((generated+1))
+      fi
+    fi
+    echo "| $$n | [$$p]($$u) | $$desc |"
+  done <<< "$$NAMES"
+} > "$$OUT"
+
+mv "$$OUT" "$$REPOS_MD"
+echo "$$REPOS_MD written: $$count submodules (reused=$$reused, generated=$$generated, tbd=$$tbd)"
+endef
+export REPOS_MD_SCRIPT
+
+repos-md:
+	@test -f .gitmodules || { echo "No .gitmodules — nothing to index" >&2; exit 0; }
+	@REPOS_MD="$(REPOS_MD)" bash -c "$$REPOS_MD_SCRIPT"
