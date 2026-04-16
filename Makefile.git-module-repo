@@ -1,18 +1,18 @@
 # Makefile.git-module-repo
-# Deterministic CLI mirror of .agents/skills/**.
-# Each target corresponds to one SKILL.md and follows the same steps.
-# The skill files remain the source of truth; this file is the executable
-# clone of those steps for direct invocation (CI, scripts, muscle memory).
+# Deterministic CLI mirror of .agents/commands/**.
+# Each target corresponds to one user-invoked command and follows the same steps.
+# The command files remain the source of truth; this file is the executable
+# clone for direct invocation (CI, scripts, muscle memory).
 #
 # Usage:
 #   make -f Makefile.git-module-repo <target> [VAR=value ...]
 #
-# Targets <-> skills:
-#   init        <-> .agents/skills/git-module-init/SKILL.md
-#   pull-latest <-> .agents/skills/git-module-pull-latest/SKILL.md
-#   cleanup-*   <-> .agents/skills/git-module-cleanup/SKILL.md
-#   track-main  <-> .agents/skills/git-module-track-main/SKILL.md
-#   repos-md    <-> .agents/skills/git-module-generate-repos-md/SKILL.md
+# Targets <-> commands:
+#   init        <-> .agents/commands/git-module-init.md
+#   pull-latest <-> .agents/commands/git-module-pull-latest.md
+#   cleanup-*   <-> .agents/commands/git-module-cleanup.md
+#   track-main  <-> .agents/commands/git-module-track-main.md
+#   repos-md    <-> .agents/commands/git-module-generate-repos-md.md
 #
 # Compatible with GNU Make 3.81 (macOS system make) — no .ONESHELL required.
 
@@ -29,7 +29,7 @@ REPOS_MD  ?= REPOS.md
 
 # ---------------------------------------------------------------------------
 help:
-	@echo "Makefile.git-module-repo — mirrors .agents/skills/<name>/SKILL.md"
+	@echo "Makefile.git-module-repo — mirrors .agents/commands/<name>.md"
 	@echo ""
 	@echo "Targets:"
 	@echo "  init           REPO_URL=<url> TARGET_PATH=<path> [BRANCH=main]"
@@ -49,7 +49,7 @@ help:
 	@echo "                 -> git-module-generate-repos-md"
 
 # ---------------------------------------------------------------------------
-# init — mirrors .agents/skills/git-module-init/SKILL.md
+# init — mirrors .agents/commands/git-module-init.md
 # ---------------------------------------------------------------------------
 init:
 	@test -n "$(REPO_URL)"    || { echo "REPO_URL is required"    >&2; exit 2; }
@@ -63,7 +63,7 @@ init:
 	@echo "Staged: .gitmodules $(TARGET_PATH) (not committed)"
 
 # ---------------------------------------------------------------------------
-# pull-latest — mirrors .agents/skills/git-module-pull-latest/SKILL.md
+# pull-latest — mirrors .agents/commands/git-module-pull-latest.md
 # ---------------------------------------------------------------------------
 pull-latest:
 	@if [ -n "$(TARGET_PATH)" ]; then \
@@ -75,7 +75,7 @@ pull-latest:
 	@git diff --submodule=log || true
 
 # ---------------------------------------------------------------------------
-# cleanup — mirrors .agents/skills/git-module-cleanup/SKILL.md
+# cleanup — mirrors .agents/commands/git-module-cleanup.md
 # ---------------------------------------------------------------------------
 cleanup-audit:
 	@echo "== git submodule status =="
@@ -106,7 +106,7 @@ cleanup-remove:
 cleanup: cleanup-audit cleanup-sync
 
 # ---------------------------------------------------------------------------
-# track-main — mirrors .agents/skills/git-module-track-main/SKILL.md
+# track-main — mirrors .agents/commands/git-module-track-main.md
 # ---------------------------------------------------------------------------
 track-main:
 	@set -e; \
@@ -132,7 +132,7 @@ track-main:
 	@git submodule status
 
 # ---------------------------------------------------------------------------
-# repos-md — mirrors .agents/skills/git-module-generate-repos-md/SKILL.md
+# repos-md — mirrors .agents/commands/git-module-generate-repos-md.md
 # Existing $(REPOS_MD) descriptions are reused verbatim; new submodules get
 # a README-derived line, a name-derived `_(auto)_` line, or `_TBD_`.
 #
